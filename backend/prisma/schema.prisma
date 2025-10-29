@@ -1,0 +1,82 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model TenantSettings {
+  id                String   @id @default("singleton")
+  baseUrl           String
+  xRoadInstance     String
+  xRoadMemberClass  String
+  xRoadMemberCode   String
+  xRoadSubsystem    String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  certificate       Certificate?
+}
+
+model Certificate {
+  id            String   @id @default(cuid())
+  p12Encrypted  Bytes
+  iv            Bytes
+  authTag       Bytes
+  label         String
+  fingerprint   String
+  subject       String
+  notBefore     DateTime
+  notAfter      DateTime
+  passEncrypted Bytes
+  passIv        Bytes
+  passAuthTag   Bytes
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenantId      String   @unique
+  tenant        TenantSettings @relation(fields: [tenantId], references: [id])
+}
+
+model Provider {
+  id            String   @id @default(cuid())
+  routeVersion  String   // r1, r2, etc
+  xRoadInstance String   // SI
+  memberClass   String   // GOV
+  memberCode    String   // xroadss1
+  subsystemCode String?  // Proveedor
+  displayName   String   // "SI / GOV / xroadss1 / Proveedor"
+  hasServices Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  services      Service[]
+
+  @@unique([routeVersion, xRoadInstance, memberClass, memberCode, subsystemCode])
+}
+
+
+model Service {
+  id             String   @id @default(cuid())
+  providerId     String
+  serviceCode    String
+  serviceVersion String?
+  serviceType    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  provider       Provider @relation(fields: [providerId], references: [id])
+  endpoints      Endpoint[]
+  @@unique([providerId, serviceCode])
+}
+
+model Endpoint {
+  id        String   @id @default(cuid())
+  serviceId String
+  method    String
+  path      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  service   Service  @relation(fields: [serviceId], references: [id])
+  @@unique([serviceId, path])
+}
