@@ -1,37 +1,32 @@
 // src/modules/providers/router.ts
-
 import { Router } from 'express';
 import { prisma } from '../../db/prisma';
 import { refreshProviders } from '../../core/xroad/discovery';
-import { getMtlsAgent } from '../../core/mtls/agentFactory';
-import axios from 'axios';
+import { requireAuth } from '../../middlewares/auth';
 
 const router = Router();
 
-router.get('/', async (_req, res) => {
+/** GET /api/providers  -> lista para el usuario logueado */
+router.get('/', requireAuth, async (req, res) => {
+  const userId = req.auth!.userId;
   const providers = await prisma.provider.findMany({
+    where: { userId },
     orderBy: { displayName: 'asc' }
   });
   res.json(providers);
 });
 
-
-router.get('/:id/services', async (req, res) => {
+/** GET /api/providers/:id/services  -> servicios del provider SI es del usuario */
+router.get('/:id/services', requireAuth, async (req, res) => {
+  const userId = req.auth!.userId;
   const { id } = req.params;
-  const provider = await prisma.provider.findUnique({
-    where: { id },
-    include: {
-      services: {
-        include: {
-          endpoints: true
-        }
-      }
-    }
+
+  const provider = await prisma.provider.findFirst({
+    where: { id, userId },
+    include: { services: { include: { endpoints: true } } }
   });
 
-  if (!provider) {
-    return res.status(404).json({ error: 'provider_not_found' });
-  }
+  if (!provider) return res.status(404).json({ error: 'provider_not_found' });
 
   return res.json({
     provider: provider.displayName,
@@ -39,22 +34,20 @@ router.get('/:id/services', async (req, res) => {
       code: s.serviceCode,
       version: s.serviceVersion,
       type: s.serviceType,
-      endpoints: s.endpoints
+      endpoints: s.endpoints.map(e => ({ method: e.method, path: e.path }))
     }))
   });
 });
 
-
-router.post('/refresh', async (_req, res) => {
+/** POST /api/providers/refresh -> delete→recreate para el usuario */
+router.post('/refresh', requireAuth, async (req, res) => {
   try {
-    const result = await refreshProviders();
+    const userId = req.auth!.userId;
+    const result = await refreshProviders(userId);
     return res.json(result);
   } catch (err: any) {
-    console.error("Refresh error =>", err);
-    return res.status(500).json({
-      error: 'discovery_failed',
-      detail: err?.message || String(err)
-    });
+    console.error('Refresh error =>', err);
+    return res.status(500).json({ error: 'discovery_failed', detail: err?.message || String(err) });
   }
 });
 

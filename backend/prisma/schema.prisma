@@ -1,5 +1,4 @@
 // prisma/schema.prisma
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -9,24 +8,38 @@ generator client {
   provider = "prisma-client-js"
 }
 
-model TenantSettings {
-  id                String   @id @default("singleton")
-  baseUrl           String
-  xRoadInstance     String
-  xRoadMemberClass  String
-  xRoadMemberCode   String
-  xRoadSubsystem    String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  certificate       Certificate?
+/** === Identidad de usuario + permisos + certificado === */
+model User {
+  id               String   @id @default(cuid())
+  pin              String   @unique 
+  passwordHash     String
+  role             String   @default("USER")
+  firstLoginDone   Boolean  @default(false)
+
+  // X-Road por usuario
+  baseUrl          String?
+  xRoadInstance    String?
+  xRoadMemberClass String?
+  xRoadMemberCode  String?
+  xRoadSubsystem   String?
+
+  certificate      UserCertificate?
+  permissions      UserPermissions?
+
+  // Descubrimiento por usuario
+  providers        Provider[]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  UploadedFile     UploadedFile[]
 }
 
-model Certificate {
+model UserCertificate {
   id            String   @id @default(cuid())
+  userId        String   @unique
   p12Encrypted  Bytes
   iv            Bytes
   authTag       Bytes
-  label         String
   fingerprint   String
   subject       String
   notBefore     DateTime
@@ -36,47 +49,81 @@ model Certificate {
   passAuthTag   Bytes
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  tenantId      String   @unique
-  tenant        TenantSettings @relation(fields: [tenantId], references: [id])
+  user          User     @relation(fields: [userId], references: [id])
 }
 
+model UserPermissions {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  canViewProviders Boolean  @default(true)
+  canViewServices  Boolean  @default(true)
+  canViewFiles     Boolean  @default(true)
+  canDownloadFiles Boolean  @default(true)
+  user             User     @relation(fields: [userId], references: [id])
+}
+
+/** === Descubrimiento de proveedores/servicios por usuario === */
 model Provider {
   id            String   @id @default(cuid())
-  routeVersion  String   // r1, r2, etc
-  xRoadInstance String   // SI
-  memberClass   String   // GOV
-  memberCode    String   // xroadss1
-  subsystemCode String?  // Proveedor
-  displayName   String   // "SI / GOV / xroadss1 / Proveedor"
-  hasServices Boolean @default(false)
+  userId        String   // <— dueño
+  routeVersion  String   // r1/r2/r3 o ''
+  xRoadInstance String
+  memberClass   String
+  memberCode    String
+  subsystemCode String?
+  displayName   String
+  hasServices   Boolean  @default(false)
+
+  services      Service[]
+  user          User     @relation(fields: [userId], references: [id])
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  services      Service[]
 
-  @@unique([routeVersion, xRoadInstance, memberClass, memberCode, subsystemCode])
+  @@unique([userId, routeVersion, xRoadInstance, memberClass, memberCode, subsystemCode])
 }
-
 
 model Service {
   id             String   @id @default(cuid())
+  userId         String   // <— dueño
   providerId     String
   serviceCode    String
   serviceVersion String?
   serviceType    String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+
   provider       Provider @relation(fields: [providerId], references: [id])
   endpoints      Endpoint[]
-  @@unique([providerId, serviceCode])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, providerId, serviceCode])
 }
 
 model Endpoint {
   id        String   @id @default(cuid())
+  userId    String   // <— dueño
   serviceId String
   method    String
   path      String
+
+  service   Service  @relation(fields: [serviceId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  service   Service  @relation(fields: [serviceId], references: [id])
-  @@unique([serviceId, path])
+
+  @@unique([userId, serviceId, method, path])
 }
+
+model UploadedFile {
+  id         String   @id @default(cuid())
+  userId     String
+  filename   String
+  mimetype   String
+  size       Int
+  path       String
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+

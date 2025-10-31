@@ -1,43 +1,34 @@
+// src/core/mtls/agentFactory.ts
 import https from 'https';
 import tls from 'tls';
 import { prisma } from '../../db/prisma';
 import { decryptAesGcm } from '../crypto/aesgcm';
 import { getCachedAgent, putAgent } from './agentCache';
+import forge from 'node-forge';
 
-export async function getMtlsAgent(): Promise<https.Agent> {
-  const cacheKey = 'singleton';
+export async function getMtlsAgentForUser(userId: string): Promise<https.Agent> {
+  const cacheKey = `userCert_${userId}`;
   const cached = getCachedAgent(cacheKey);
   if (cached) return cached;
 
-  const settings = await prisma.tenantSettings.findUnique({ where: { id: 'singleton' }});
-  if (!settings) throw new Error('Tenant settings not configured');
-
-  const cert = await prisma.certificate.findUnique({ where: { tenantId: settings.id }});
-  if (!cert) throw new Error('Certificate not uploaded');
+  const userCert = await prisma.userCertificate.findUnique({ where: { userId }});
+  if (!userCert) throw new Error('No hay certificado cargado para este usuario');
 
   const masterKey = Buffer.from(process.env.MASTER_KEY!, 'hex');
 
-  // 🔹 Convertimos Uint8Array → Buffer ANTES de decrypt
-  const p12Encrypted  = Buffer.from(cert.p12Encrypted);
-  const iv            = Buffer.from(cert.iv);
-  const authTag       = Buffer.from(cert.authTag);
+  const p12Encrypted  = Buffer.from(userCert.p12Encrypted);
+  const iv            = Buffer.from(userCert.iv);
+  const authTag       = Buffer.from(userCert.authTag);
+  const pfx           = decryptAesGcm(p12Encrypted, iv, authTag, masterKey);
 
-  const passEncrypted = Buffer.from(cert.passEncrypted);
-  const passIv        = Buffer.from(cert.passIv);
-  const passAuthTag   = Buffer.from(cert.passAuthTag);
+  const passEncrypted = Buffer.from(userCert.passEncrypted);
+  const passIv        = Buffer.from(userCert.passIv);
+  const passAuthTag   = Buffer.from(userCert.passAuthTag);
+  const passphrase    = decryptAesGcm(passEncrypted, passIv, passAuthTag, masterKey).toString('utf8').trim();
 
-  // 🔹 Desencriptamos P12
-  const pfx = decryptAesGcm(p12Encrypted, iv, authTag, masterKey);
-
-  // 🔹 Desencriptamos passphrase real
-  const passphrase = decryptAesGcm(passEncrypted, passIv, passAuthTag, masterKey)
-    .toString('utf-8')
-    .trim();
-
-  // 🔹 Validación local
+  // Validación local
   tls.createSecureContext({ pfx, passphrase });
 
-  // 🔹 Agent mTLS real
   const agent = new https.Agent({
     pfx,
     passphrase,
@@ -47,4 +38,29 @@ export async function getMtlsAgent(): Promise<https.Agent> {
 
   putAgent(cacheKey, agent);
   return agent;
+}
+
+/** Helpers para extraer metadatos del p12 */
+export function parsePkcs12Meta(pfx: Buffer, passphrase: string) {
+  const p12Asn1 = forge.asn1.fromDer(pfx.toString('binary'));
+  const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, passphrase);
+  const bags = p12.getBags({ bagType: forge.pki.oids.certBag });
+  const certBag = bags[forge.pki.oids.certBag]?.[0];
+  if (!certBag) throw new Error('No certificate found inside p12');
+  return certBag.cert;
+}
+
+export function getCertFingerprintSubjectDates(cert: any) {
+  const fingerprint = forge.pki.getPublicKeyFingerprint(cert.publicKey, {
+    md: forge.md.sha256.create(),
+    encoding: 'hex',
+  }).toUpperCase();
+
+  const subject = cert.subject.attributes.map((a: any) => `${a.shortName}=${a.value}`).join(', ');
+  return {
+    fingerprint,
+    subject,
+    notBefore: cert.validity.notBefore,
+    notAfter:  cert.validity.notAfter,
+  };
 }

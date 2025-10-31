@@ -1,32 +1,45 @@
-import 'dotenv/config';  
+// src/app.ts
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { router as configRouter } from './modules/config/router';
-import { router as certRouter } from './modules/certificate/router';
+import cookieParser from 'cookie-parser';
+import { router as authRouter } from './modules/auth/router';
+import { router as profileRouter } from './modules/profile/router';
 import { router as providerRouter } from './modules/providers/router';
 import { router as proxyRouter } from './modules/proxy/router';
-import { startProviderAutoRefresh } from './sheduler/refresh';
-import { router as invokeRouter } from "./modules/invoke/router";
 import { xroadRouter } from './modules/xroad/router';
+import { adminRouter } from './modules/admin/router';
+import { requireAdmin } from "./middlewares/isAdmin";
+import { requireAuth } from './middlewares/auth';
+
 
 
 const app = express();
-app.use(cors());
+app.use(cookieParser());
+// ⚙️ Configuración CORS segura para desarrollo
+app.use(cors({
+  origin: "http://localhost:3000",
+  credentials: true,
+}));
+
+// 🧩 Parseo antes de todo
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/api/config', configRouter);
-app.use('/api/certificate', certRouter);
+
+// 🔐 auth & profile
+app.use('/api/auth', authRouter);
+app.use('/api/profile', profileRouter);
+
+// 🔎 discovery / invoke (por usuario)
 app.use('/api/providers', providerRouter);
 app.use('/api/proxy', proxyRouter);
-app.use("/api/invoke", invokeRouter);
-app.use("/api/xroad", xroadRouter)
-
-startProviderAutoRefresh();
-
-
+app.use('/api/xroad', xroadRouter);
+app.use("/api/admin", requireAuth, requireAdmin, adminRouter);
+// ✅ Startup
 const PORT = Number(process.env.PORT || 4000);
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ API up on http://localhost:${PORT}`);
+  console.log(`✅ API running on http://localhost:${PORT}`);
 });
 
 export default app;

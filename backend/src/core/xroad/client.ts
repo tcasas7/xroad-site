@@ -1,28 +1,29 @@
+// src/core/xroad/client.ts
 import axios from 'axios';
 import { prisma } from '../../db/prisma';
-import { getMtlsAgent } from '../mtls/agentFactory';
+import { getMtlsAgentForUser } from '../mtls/agentFactory';
 import { joinUrl } from './url';
 
-/**
- * Carga baseUrl + clientId desde DB (persistido)
- */
-export async function getBaseUrlAndClientHeader() {
-  const s = await prisma.tenantSettings.findUnique({ where: { id: 'singleton' }});
-  if (!s) throw new Error('Tenant settings not configured. POST /api/config first.');
+export async function getBaseUrlAndClientHeaderForUser(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId }});
+  if (!user) throw new Error('User not found');
 
-  const baseUrl = s.baseUrl.replace(/\/+$/, '');
-  const xRoadClient = `${s.xRoadInstance}/${s.xRoadMemberClass}/${s.xRoadMemberCode}/${s.xRoadSubsystem}`;
+  if (!user.baseUrl || !user.xRoadInstance || !user.xRoadMemberClass || !user.xRoadMemberCode || !user.xRoadSubsystem) {
+    throw new Error('X-Road profile incomplete for this user');
+  }
+
+  const baseUrl = user.baseUrl.replace(/\/+$/, '');
+  const xRoadClient = `${user.xRoadInstance}/${user.xRoadMemberClass}/${user.xRoadMemberCode}/${user.xRoadSubsystem}`;
 
   return { baseUrl, xRoadClient };
 }
 
 /**
- * listClients → descubre TODOS los miembros/subsistemas
- * Endpoint del Security Server (metaservice REST)
+ * listClients (user scoped)
  */
-export async function listClients() {
-  const { baseUrl } = await getBaseUrlAndClientHeader();
-  const httpsAgent = await getMtlsAgent();
+export async function listClientsForUser_simple(userId: string) {
+  const { baseUrl } = await getBaseUrlAndClientHeaderForUser(userId);
+  const httpsAgent = await getMtlsAgentForUser(userId);
 
   const url = joinUrl(baseUrl, 'listClients');
 
@@ -35,16 +36,16 @@ export async function listClients() {
 }
 
 /**
- * allowedMethods → descubre servicios y endpoints para un proveedor específico
+ * allowedMethods (user scoped)
  */
-export async function allowedMethods(provider: {
+export async function allowedMethodsForUser(userId: string, provider: {
   instance: string;
   memberClass: string;
   memberCode: string;
   subsystemCode?: string | null;
 }) {
-  const { baseUrl, xRoadClient } = await getBaseUrlAndClientHeader();
-  const httpsAgent = await getMtlsAgent();
+  const { baseUrl, xRoadClient } = await getBaseUrlAndClientHeaderForUser(userId);
+  const httpsAgent = await getMtlsAgentForUser(userId);
 
   const path = joinUrl(
     baseUrl,
@@ -68,12 +69,11 @@ export async function allowedMethods(provider: {
 }
 
 /**
- * (Opcional) GET REST directo de un recurso ya armado
- * Usado en proxy
+ * proxyGet directo (user scoped)
  */
-export async function proxyGet(fullUrl: string) {
-  const httpsAgent = await getMtlsAgent();
-  const { xRoadClient } = await getBaseUrlAndClientHeader();
+export async function proxyGetForUser(userId: string, fullUrl: string) {
+  const httpsAgent = await getMtlsAgentForUser(userId);
+  const { xRoadClient } = await getBaseUrlAndClientHeaderForUser(userId);
 
   const { data, headers, status } = await axios.get(fullUrl, {
     httpsAgent,

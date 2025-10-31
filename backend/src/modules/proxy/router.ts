@@ -1,27 +1,31 @@
+// src/modules/proxy/router.ts
 import { Router } from 'express';
 import { prisma } from '../../db/prisma';
-import { getBaseUrlAndClientHeader } from '../../core/xroad/client';
-import { getMtlsAgent } from '../../core/mtls/agentFactory';
+import { getMtlsAgentForUser } from '../../core/mtls/agentFactory';
 import axios from 'axios';
+import { requireAuth } from '../../middlewares/auth';
 
 const router = Router();
 
-router.post('/', async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
+  const userId = req.auth!.userId;
   const { providerId, serviceId, endpointId, method, path, query, body } = req.body || {};
 
-  const provider = await prisma.provider.findUnique({ where: { id: providerId }});
-  const service = await prisma.service.findUnique({ where: { id: serviceId, providerId }});
-  const endpoint = await prisma.endpoint.findUnique({ where: { id: endpointId, serviceId }});
+  const provider = await prisma.provider.findFirst({ where: { id: providerId, userId }});
+  const service  = await prisma.service.findFirst({ where: { id: serviceId, userId, providerId }});
+  const endpoint = await prisma.endpoint.findFirst({ where: { id: endpointId, userId, serviceId }});
 
   if (!provider || !service || !endpoint) return res.status(400).json({ error: 'Invalid provider/service/endpoint' });
 
-  const { baseUrl, xRoadClient } = await getBaseUrlAndClientHeader();
-  const httpsAgent = await getMtlsAgent();
+  const user = await prisma.user.findUnique({ where: { id: userId }});
+  if (!user?.baseUrl || !user.xRoadInstance) return res.status(400).json({ error: 'X-Road profile incomplete' });
 
-  // Construye URL final X-Road
+  const baseUrl = user.baseUrl.replace(/\/+$/, '');
+  const xRoadClient = `${user.xRoadInstance}/${user.xRoadMemberClass}/${user.xRoadMemberCode}/${user.xRoadSubsystem}`;
+
   const base = [
     baseUrl,
-    'r1',
+    provider.routeVersion,
     provider.xRoadInstance,
     provider.memberClass,
     provider.memberCode,
@@ -29,7 +33,6 @@ router.post('/', async (req, res) => {
     service.serviceCode
   ].filter(Boolean).join('/').replace(/\/{2,}/g, '/').replace(':/','://');
 
-  // si se pasa un path específico, respeta; si no, toma el del endpoint
   const finalUrl = (path && typeof path === 'string')
     ? base + (path.startsWith('/') ? path : '/' + path)
     : base + (endpoint.path.startsWith('/') ? endpoint.path : '/' + endpoint.path);
@@ -37,6 +40,7 @@ router.post('/', async (req, res) => {
   const methodUsed = (method || endpoint.method || 'GET').toUpperCase();
 
   try {
+    const httpsAgent = await getMtlsAgentForUser(userId);
     const r = await axios.request({
       url: finalUrl,
       method: methodUsed as any,
@@ -47,10 +51,7 @@ router.post('/', async (req, res) => {
       responseType: 'arraybuffer'
     });
 
-    // Propaga content-type si viene
     if (r.headers['content-type']) res.setHeader('Content-Type', r.headers['content-type'] as string);
-    // Si querés forzar descarga: res.setHeader('Content-Disposition', 'attachment');
-
     return res.status(r.status).send(Buffer.from(r.data));
   } catch (e:any) {
     const status = e?.response?.status || 502;

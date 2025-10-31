@@ -3,7 +3,7 @@ import { refreshProviders } from '../core/xroad/discovery';
 
 let running = false;
 
-export function startProviderAutoRefresh(intervalMs = 5 * 60 * 1000) {
+/*export function startProviderAutoRefresh(intervalMs = 5 * 60 * 1000) {
   console.log(`🔄 Scheduler de providers activo (cada ${intervalMs / 1000}s)`);
 
   setInterval(async () => {
@@ -19,4 +19,8 @@ export function startProviderAutoRefresh(intervalMs = 5 * 60 * 1000) {
 
     running = false;
   }, intervalMs);
+}*/
+
+export function startProviderAutoRefresh() {
+  console.log("⚠️ Global auto-refresh deshabilitado (ahora por usuario)");
 }
