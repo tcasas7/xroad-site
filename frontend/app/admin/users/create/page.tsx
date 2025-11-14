@@ -44,7 +44,7 @@ export default function CreateUserPage() {
       <form onSubmit={handleSubmit} className="space-y-3">
 
         <div>
-          <label className="block mb-1">PIN (5 dígitos)</label>
+          <label className="block mb-1">Legajo (5 dígitos)</label>
           <input
             type="text"
             className="border w-full p-2 rounded"

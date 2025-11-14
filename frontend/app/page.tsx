@@ -22,137 +22,159 @@ export default function HomePage() {
   const [modalProvider, setModalProvider] = useState<ProviderSummary | null>(null);
   const [services, setServices] = useState<ServiceSummary[] | null>(null);
   const [selectedService, setSelectedService] = useState<ServiceSummary | null>(null);
+
   const [files, setFiles] = useState<string[] | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
 
-useEffect(() => {
-  (async () => {
-    try {
-      const profile = await getProfileXroad();
+  /** INIT */
+  useEffect(() => {
+    (async () => {
+      try {
+        const profile = await getProfileXroad();
 
-      // Si el backend responde con perfil incompleto, redirigir
-      if (
-        !profile.ok &&
-        !(
-          profile.baseUrl &&
-          profile.xroad?.instance &&
-          profile.xroad?.memberClass &&
-          profile.xroad?.memberCode &&
-          profile.xroad?.subsystem &&
-          profile.hasCert
-        )
-      ) {
-        router.push("/setup");
-        return;
+        if (
+          !profile.ok &&
+          !(
+            profile.baseUrl &&
+            profile.xroad?.instance &&
+            profile.xroad?.memberClass &&
+            profile.xroad?.memberCode &&
+            profile.xroad?.subsystem &&
+            profile.hasCert
+          )
+        ) {
+          router.push("/setup");
+          return;
+        }
+
+        let list = await getProviders();
+
+        if (profile.ok && list.length === 0) {
+          
+          setProviders([]);
+          setAuthChecked(true);
+          return;
+        }
+
+
+        setProviders(list);
+        setAuthChecked(true);
+      } catch (err) {
+        console.error("Init error:", err);
+        router.push("/login");
+      } finally {
+        setLoading(false);
       }
+    })();
+  }, [router]);
 
-      // Cargar proveedores
-      let list = await getProviders();
+  if (!authChecked) return <div className="p-4">Verificando sesión...</div>;
 
-      if (list.length === 0) {
-        console.log("⚙️ Ejecutando descubrimiento automático...");
-        await refreshProviders();
-        list = await getProviders();
-      }
-
-      setProviders(list);
-      setAuthChecked(true);
-    } catch (err) {
-      console.error("Error inicial:", err);
-      router.push("/login");
-    } finally {
-      setLoading(false);
-    }
-  })();
-}, [router]);
-
-
-
-  if (!authChecked) {
-    return <div className="p-4 text-gray-600">Verificando sesión...</div>;
-  }
-
-  // --- REFRESH manual
+  /** REFRESH */
   async function handleRefresh() {
     setLoading(true);
-    await refreshProviders();
+
+    try {
+      await refreshProviders();
+    } catch (err) {
+      console.warn("Refresh failed (probably no permissions)", err);
+    }
+
     const list = await getProviders();
     setProviders(list);
     setLoading(false);
   }
 
-  // --- LOGOUT
+  /** LOGOUT */
   async function handleLogout() {
     await logout();
     router.push("/login");
   }
 
-  // --- Abrir modal con servicios
+  /** OPEN PROVIDER */
   async function openModal(provider: ProviderSummary) {
     setModalProvider(provider);
     const resp = await getProviderServices(provider.id);
+
     setServices(resp.services);
     setSelectedService(null);
     setFiles(null);
   }
 
-  // --- Cargar archivos del servicio
+  /** LOAD FILES FOR SERVICE */
   async function handleSelectService(svc: ServiceSummary) {
     setSelectedService(svc);
     setFilesLoading(true);
+
     try {
       const ep = svc.endpoints[0];
-      const { items } = await getFilesForEndpoint(modalProvider!.id, svc.code, ep.path);
+
+      const { items } = await getFilesForEndpoint(
+        modalProvider!.id,
+        svc.id,          // <-- serviceId REAL
+        ep.path
+      );
+
       setFiles(items);
-    } catch {
+    } catch (err) {
+      console.error("FILE LOAD ERR:", err);
       setFiles([]);
     }
+
     setFilesLoading(false);
+  }
+
+  /** URLs */
+  function previewUrl(name: string) {
+    const ep = selectedService!.endpoints[0];
+
+    return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?` +
+      `providerId=${modalProvider!.id}` +
+      `&serviceId=${selectedService!.id}` +
+      `&serviceCode=${selectedService!.code}` +
+      `&endpointPath=${encodeURIComponent(ep.path)}` +
+      `&filename=${encodeURIComponent(name)}` +
+      `&mode=preview`;
   }
 
   function downloadUrl(name: string) {
     const ep = selectedService!.endpoints[0];
-    return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?providerId=${modalProvider!.id}&serviceCode=${selectedService!.code}&endpointPath=${ep.path}&filename=${name}&mode=download`;
+
+    return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?` +
+      `providerId=${modalProvider!.id}` +
+      `&serviceId=${selectedService!.id}` +
+      `&serviceCode=${selectedService!.code}` +
+      `&endpointPath=${encodeURIComponent(ep.path)}` +
+      `&filename=${encodeURIComponent(name)}` +
+      `&mode=download`;
   }
 
-  function previewUrl(name: string) {
-    const ep = selectedService!.endpoints[0];
-    return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?providerId=${modalProvider!.id}&serviceCode=${selectedService!.code}&endpointPath=${ep.path}&filename=${name}&mode=preview`;
-  }
-
-  // --- Render principal
+  /** RENDER */
   return (
     <div className="p-4">
-      {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-semibold">Proveedores detectados</h1>
+
         <div className="flex gap-2">
-          <button
-            onClick={handleRefresh}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm"
-          >
+          <button onClick={handleRefresh} className="bg-blue-600 text-white px-3 py-2 rounded">
             🔄 Actualizar
           </button>
-          <button
-            onClick={handleLogout}
-            className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm"
-          >
+          <button onClick={handleLogout} className="bg-red-600 text-white px-3 py-2 rounded">
             Salir
           </button>
         </div>
       </div>
 
-      {/* Estados */}
-      {loading && <p className="text-gray-600">Cargando...</p>}
+      {loading && <p>Cargando...</p>}
+
       {!loading && providers.length === 0 && (
-        <p className="text-gray-500 text-sm">No hay proveedores detectados aún.</p>
+        <p className="text-gray-500 text-sm">No hay proveedores detectados.</p>
       )}
 
-      {/* Tabla de proveedores */}
       {!loading && providers.length > 0 && (
         <table className="w-full text-sm border">
-          <thead className="bg-gray-100 text-left">
-            <tr>
+          <thead>
+            <tr className="bg-gray-100">
               <th className="p-2">Subsystem</th>
               <th className="p-2">Servicios</th>
               <th className="p-2">Acción</th>
@@ -162,12 +184,12 @@ useEffect(() => {
             {providers.map((p) => (
               <tr key={p.id} className="border-t">
                 <td className="p-2">{p.displayName}</td>
-                <td className="p-2">{p.hasServices ? "✅ Sí" : "❌ No"}</td>
+                <td className="p-2">{p.hasServices ? "Sí" : "No"}</td>
                 <td className="p-2">
                   <button
-                    onClick={() => (p.hasServices ? openModal(p) : null)}
-                    className="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm disabled:opacity-50"
                     disabled={!p.hasServices}
+                    onClick={() => openModal(p)}
+                    className="bg-gray-200 px-3 py-1 rounded text-sm"
                   >
                     🔍 Ver servicios
                   </button>
@@ -180,38 +202,26 @@ useEffect(() => {
 
       {/* MODAL */}
       {modalProvider && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50 px-4">
-          <div className="bg-white rounded-lg shadow-lg w-full max-w-3xl p-6 relative">
-            {/* Header modal */}
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4">
+          <div className="bg-white rounded-lg p-6 max-w-3xl w-full relative">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">
                 Servicios — {modalProvider.displayName}
               </h2>
-              <button
-                onClick={() => setModalProvider(null)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                ✕
-              </button>
+              <button onClick={() => setModalProvider(null)}>✕</button>
             </div>
 
-            {/* Servicios */}
             {!selectedService && services && (
               <div className="space-y-2 max-h-[60vh] overflow-auto">
                 {services.map((svc) => (
-                  <div
-                    key={svc.code}
-                    className="p-3 border rounded flex justify-between items-center"
-                  >
+                  <div key={svc.id} className="p-3 border rounded flex justify-between">
                     <div>
                       <strong>{svc.code}</strong>
-                      <div className="text-xs text-gray-500">
-                        {svc.type || "REST"}
-                      </div>
+                      <div className="text-xs text-gray-600">{svc.type || "REST"}</div>
                     </div>
                     <button
                       onClick={() => handleSelectService(svc)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded"
+                      className="bg-blue-600 text-white px-3 py-1 rounded"
                     >
                       📂 Ver archivos
                     </button>
@@ -220,7 +230,6 @@ useEffect(() => {
               </div>
             )}
 
-            {/* Archivos */}
             {selectedService && (
               <div>
                 <button
@@ -228,7 +237,7 @@ useEffect(() => {
                     setSelectedService(null);
                     setFiles(null);
                   }}
-                  className="text-sm mb-4 underline text-blue-700"
+                  className="text-blue-700 underline text-sm mb-4"
                 >
                   ← Volver a servicios
                 </button>
@@ -237,28 +246,27 @@ useEffect(() => {
 
                 {!filesLoading && files && (
                   <ul className="space-y-2 max-h-[60vh] overflow-auto">
-                    {files.length === 0 && (
-                      <p className="text-sm text-gray-500">
-                        No hay archivos disponibles.
-                      </p>
-                    )}
+                    {files.length === 0 && <p>No hay archivos disponibles.</p>}
+
                     {files.map((f) => (
                       <li
                         key={f}
                         className="p-3 border rounded flex justify-between items-center"
                       >
-                        <span className="truncate">{f}</span>
+                        <span>{f}</span>
+
                         <div className="flex gap-2">
                           <a
                             href={previewUrl(f)}
                             target="_blank"
-                            className="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm"
+                            className="bg-gray-200 px-3 py-1 rounded"
                           >
                             👁 Ver
                           </a>
+
                           <a
                             href={downloadUrl(f)}
-                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                            className="bg-green-600 text-white px-3 py-1 rounded"
                           >
                             ⬇ Descargar
                           </a>

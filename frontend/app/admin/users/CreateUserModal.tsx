@@ -44,7 +44,7 @@ export function CreateUserModal({ onClose, onCreated }: any) {
 
         <input
           type="text"
-          placeholder="PIN (5 dígitos)"
+          placeholder="Legajo (5 dígitos)"
           value={pin}
           maxLength={5}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}

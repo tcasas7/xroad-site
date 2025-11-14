@@ -12,10 +12,14 @@ export interface EndpointSummary {
 }
 
 export interface ServiceSummary {
-  code: string;              // <- ahora es siempre .code (alias de serviceCode)
+  id: string;
+  code: string;              
   version?: string | null;
   type?: string | null;
   endpoints: EndpointSummary[];
+  canView?: boolean;
+  canDownload?: boolean;
+  
 }
 
 export interface ProviderServicesResponse {

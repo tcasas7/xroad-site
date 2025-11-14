@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -8,7 +7,6 @@ generator client {
   provider = "prisma-client-js"
 }
 
-/** === Identidad de usuario + permisos + certificado === */
 model User {
   id               String   @id @default(cuid())
   pin              String   @unique 
@@ -16,7 +14,6 @@ model User {
   role             String   @default("USER")
   firstLoginDone   Boolean  @default(false)
 
-  // X-Road por usuario
   baseUrl          String?
   xRoadInstance    String?
   xRoadMemberClass String?
@@ -25,13 +22,16 @@ model User {
 
   certificate      UserCertificate?
   permissions      UserPermissions?
+  servicePermissions UserServicePermission[]
 
-  // Descubrimiento por usuario
   providers        Provider[]
+  servicesOwned    Service[]    // 👈 inversa de Service.user
+  endpointsOwned   Endpoint[]   // 👈 inversa de Endpoint.user
 
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   UploadedFile     UploadedFile[]
+  actionLog        ActionLog[]
 }
 
 model UserCertificate {
@@ -62,11 +62,10 @@ model UserPermissions {
   user             User     @relation(fields: [userId], references: [id])
 }
 
-/** === Descubrimiento de proveedores/servicios por usuario === */
 model Provider {
   id            String   @id @default(cuid())
-  userId        String   // <— dueño
-  routeVersion  String   // r1/r2/r3 o ''
+  userId        String?  // opcional
+  routeVersion  String
   xRoadInstance String
   memberClass   String
   memberCode    String
@@ -75,17 +74,18 @@ model Provider {
   hasServices   Boolean  @default(false)
 
   services      Service[]
-  user          User     @relation(fields: [userId], references: [id])
+  user          User?    @relation(fields: [userId], references: [id])
+  servicePermissions UserServicePermission[]
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@unique([userId, routeVersion, xRoadInstance, memberClass, memberCode, subsystemCode])
+  @@unique([routeVersion, xRoadInstance, memberClass, memberCode, subsystemCode])
 }
 
 model Service {
   id             String   @id @default(cuid())
-  userId         String   // <— dueño
+  userId         String?  // opcional
   providerId     String
   serviceCode    String
   serviceVersion String?
@@ -93,26 +93,30 @@ model Service {
 
   provider       Provider @relation(fields: [providerId], references: [id])
   endpoints      Endpoint[]
+  servicePermissions UserServicePermission[]
+
+  user           User?    @relation(fields: [userId], references: [id]) // <-- inversa en User.servicesOwned
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  @@unique([userId, providerId, serviceCode])
+  @@unique([providerId, serviceCode])
 }
 
 model Endpoint {
   id        String   @id @default(cuid())
-  userId    String   // <— dueño
+  userId    String?  // opcional
   serviceId String
   method    String
   path      String
 
   service   Service  @relation(fields: [serviceId], references: [id])
+  user      User?    @relation(fields: [userId], references: [id]) // <-- inversa en User.endpointsOwned
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, serviceId, method, path])
+  @@unique([serviceId, method, path])
 }
 
 model UploadedFile {
@@ -126,4 +130,32 @@ model UploadedFile {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+model ActionLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+  hidden    Boolean  @default(false)
+}
+
+model UserServicePermission {
+  id          String   @id @default(cuid())
+  userId      String
+  providerId  String?
+  serviceId   String?
+  canView     Boolean  @default(false)
+  canDownload Boolean  @default(false)
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider    Provider? @relation(fields: [providerId], references: [id])
+  service     Service?  @relation(fields: [serviceId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([providerId])
+  @@index([serviceId])
+}
 

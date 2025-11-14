@@ -98,29 +98,27 @@ router.get('/xroad', requireAuth, async (req, res) => {
 router.post('/certificate', requireAuth, upload.single('p12'), async (req, res) => {
   try {
     const { passphrase = '' } = req.body || {};
-    if (!req.file) {
-      return res.status(400).json({ error: 'p12_required' });
-    }
+    const userId = req.auth!.userId;
 
-    // Validar estructura básica del .p12
+    if (!req.file) return res.status(400).json({ error: 'p12_required' });
+
+    // ✅ Validar que el P12 se pueda abrir
     try {
       tls.createSecureContext({ pfx: req.file.buffer, passphrase });
     } catch {
       return res.status(400).json({ error: 'invalid_p12_or_passphrase' });
     }
 
-    // Extraer metadatos
+    // ✅ Extraer metadata del certificado
     const certObj = parsePkcs12Meta(req.file.buffer, passphrase);
     const meta = getCertFingerprintSubjectDates(certObj);
 
-    // Cifrar archivo y passphrase
+    // ✅ Cifrar P12 + passphrase
     const masterKey = Buffer.from(process.env.MASTER_KEY!, 'hex');
     const encP12 = encryptAesGcm(req.file.buffer, masterKey);
     const encPass = encryptAesGcm(Buffer.from(passphrase, 'utf8'), masterKey);
 
-    const userId = req.auth!.userId;
-
-    // Guardar certificado (upsert)
+    // ✅ Guardar en DB con upsert
     await prisma.userCertificate.upsert({
       where: { userId },
       update: {
@@ -152,7 +150,16 @@ router.post('/certificate', requireAuth, upload.single('p12'), async (req, res) 
 
     console.log(`✅ Certificado guardado para usuario ${userId}`);
 
-    // 🧠 Inicializar perfil X-Road si está vacío
+    // ✅ Registrar en historial
+    await prisma.actionLog.create({
+      data: {
+        userId,
+        action: 'UPLOAD_CERT',
+        detail: `Certificado subido correctamente`,
+      },
+    });
+
+    // ✅ Si el usuario no tenía datos X-Road configurados, asignamos valores por defecto
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (
       !user?.baseUrl ||
@@ -172,10 +179,11 @@ router.post('/certificate', requireAuth, upload.single('p12'), async (req, res) 
         },
       });
 
-      console.log(`⚙️ Perfil X-Road inicializado automáticamente para ${user?.pin}`);
+      console.log(`⚙️ Perfil X-Road inicializado automáticamente para Legajo ${user?.pin}`);
     }
 
     return res.json({ ok: true, meta });
+
   } catch (e: unknown) {
     const err = e as Error;
     console.error('❌ Cert upload error:', err.message || err);

@@ -76,7 +76,7 @@ async function handleDelete(id: string) {
         <table className="w-full border text-sm">
          <thead className="bg-gray-100">
         <tr>
-            <th className="p-2 text-center">PIN</th>
+            <th className="p-2 text-center">Legajo</th>
             <th className="p-2 text-center">Rol</th>
             <th className="p-2 text-center">Primer login?</th>
             <th className="p-2 text-center">Acciones</th>

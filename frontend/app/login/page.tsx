@@ -36,7 +36,7 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* PIN */}
           <div>
-            <label className="block text-sm font-medium mb-1">PIN</label>
+            <label className="block text-sm font-medium mb-1">Legajo</label>
             <input
               type="text"
               maxLength={5}

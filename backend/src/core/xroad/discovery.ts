@@ -182,10 +182,6 @@ async function upsertProviderForUser(
   }
 }
 
-
-
-
-
 async function upsertServicesAndEndpointsForUser(
   userId: string,
   providerId: string,

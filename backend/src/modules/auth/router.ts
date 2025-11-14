@@ -11,12 +11,12 @@ router.post('/register', async (req, res) => {
   const { pin, password } = req.body || {};
 
   if (!pin || !password) {
-    return res.status(400).json({ error: 'pin_password_required' });
+    return res.status(400).json({ error: 'legajo_password_required' });
   }
 
   // PIN debe ser único
   const exists = await prisma.user.findUnique({ where: { pin } });
-  if (exists) return res.status(409).json({ error: 'pin_taken' });
+  if (exists) return res.status(409).json({ error: 'legajo_taken' });
 
   const passwordHash = await bcrypt.hash(password, 10);
 
@@ -32,11 +32,11 @@ router.post('/register', async (req, res) => {
   return res.json({ ok: true, userId: user.id });
 });
 
-// ✅ POST /api/auth/login (PIN + password)
+// POST /api/auth/login 
 router.post('/login', async (req, res) => {
   const { pin, password } = req.body || {};
   if (!pin || !password)
-    return res.status(400).json({ error: 'pin_password_required' });
+    return res.status(400).json({ error: 'legajo_password_required' });
 
   const user = await prisma.user.findUnique({ where: { pin } });
   if (!user)
@@ -46,16 +46,25 @@ router.post('/login', async (req, res) => {
   if (!ok)
     return res.status(401).json({ error: 'invalid_credentials' });
 
-  // Crear token 8h
+  // Token por 8h
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
     expiresIn: '8h',
   });
 
   res.cookie('xroad_token', token, {
     httpOnly: true,
-    secure: false, // producción: true
+    secure: false,
     sameSite: 'lax',
     maxAge: 8 * 60 * 60 * 1000,
+  });
+
+  // 🧠 Log de acción
+  await prisma.actionLog.create({
+    data: {
+      userId: user.id,
+      action: 'LOGIN',
+      detail: `Inicio de sesión con Legajo ${pin}`,
+    },
   });
 
   return res.json({
@@ -73,6 +82,7 @@ router.post('/login', async (req, res) => {
     },
   });
 });
+
 
 // ✅ POST /api/auth/change-password (solo primer login)
 router.post('/change-password', requireAuth, async (req, res) => {
