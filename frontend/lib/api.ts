@@ -74,7 +74,8 @@ export async function getProviderServices(id: string) {
 export async function getFilesForEndpoint(
   providerId: string,
   serviceId: string,
-  endpointPath: string
+  endpointPath: string,
+  adminMode: boolean = false
 ) {
   const params = new URLSearchParams({
     providerId,
@@ -82,15 +83,23 @@ export async function getFilesForEndpoint(
     endpointPath,
   });
 
-  const resp = await fetch(`${API_URL}/api/xroad/files?${params.toString()}`, {
-    credentials: "include",
-    cache: "no-store",
-  });
+  if (adminMode) {
+    params.append("adminMode", "1");
+  }
+
+  const resp = await fetch(
+    `${API_URL}/api/xroad/files?${params.toString()}`,
+    {
+      credentials: "include",
+      cache: "no-store",
+    }
+  );
 
   if (!resp.ok) throw new Error("Error fetching files for endpoint");
 
   return resp.json();
 }
+
 
 
 export async function saveXroadProfile(baseUrl: string, clientId: string) {
@@ -261,5 +270,48 @@ export async function saveUserPermissions(
   });
 
   if (!resp.ok) throw new Error("Error saving permissions");
+  return resp.json();
+}
+
+export async function getMe() {
+  const resp = await fetch(`${API_URL}/api/auth/me`, {
+    credentials: "include"
+  });
+
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// 🔹 Obtener permisos de archivos para un user+service
+export async function getUserFilePermissions(userId: string, serviceId: string) {
+  const resp = await fetch(
+    `${API_URL}/api/admin/users/${userId}/file-permissions/${serviceId}`,
+    {
+      credentials: "include",
+      cache: "no-store",
+    }
+  );
+
+  if (!resp.ok) throw new Error("Error fetching file permissions");
+  return resp.json(); // { ok, rules }
+}
+
+// 🔹 Guardar permisos de archivos para un user+service
+export async function saveUserFilePermissions(
+  userId: string,
+  serviceId: string,
+  rules: { filename: string; canView: boolean; canDownload: boolean }[]
+) {
+  const resp = await fetch(
+    `${API_URL}/api/admin/users/${userId}/file-permissions/${serviceId}`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rules }),
+    }
+  );
+
+  if (!resp.ok) throw new Error("Error saving file permissions");
   return resp.json();
 }

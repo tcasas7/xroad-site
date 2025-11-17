@@ -13,7 +13,8 @@ export interface EndpointSummary {
 
 export interface ServiceSummary {
   id: string;
-  code: string;              
+  code: string;   
+  serviceCode: string;           
   version?: string | null;
   type?: string | null;
   endpoints: EndpointSummary[];

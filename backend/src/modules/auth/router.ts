@@ -112,4 +112,14 @@ router.post('/logout', (req, res) => {
   return res.json({ ok: true });
 });
 
+router.get("/me", requireAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.auth!.userId },
+    select: { id: true, pin: true, role: true }
+  });
+
+  return res.json({ ok: true, user });
+});
+
+
 export { router };

@@ -46,26 +46,49 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
     return res.status(404).json({ error: "user_not_found" });
   }
 
-  // Todos los providers con sus servicios (globales / del admin / etc.)
+  // Todos los providers con sus servicios y endpoints
   const providers = await prisma.provider.findMany({
     include: {
-      services: true,
+      services: {
+        include: { endpoints: true },   // NECESARIO PARA VER ARCHIVOS
+      },
     },
     orderBy: { displayName: "asc" },
   });
 
-  // Permisos actuales del usuario
+  // Permisos actuales del usuario (provider / service)
   const perms = await prisma.userServicePermission.findMany({
     where: { userId: targetUserId },
   });
 
-  // Mapear permisos por providerId / serviceId
+  // Permisos por archivo
+  const filePerms = await prisma.userFilePermission.findMany({
+    where: { userId: targetUserId },
+  });
+
+  // Mapear permisos
   const byProvider = new Map<string, { canView: boolean }>();
   const byService = new Map<
     string,
     { canView: boolean; canDownload: boolean }
   >();
 
+  const byFile = new Map<
+    string,
+    { filename: string; canView: boolean; canDownload: boolean }[]
+  >();
+
+  // Agrupar permisos de archivo por serviceId
+  for (const fp of filePerms) {
+    if (!byFile.has(fp.serviceId)) byFile.set(fp.serviceId, []);
+    byFile.get(fp.serviceId)!.push({
+      filename: fp.filename,
+      canView: fp.canView,
+      canDownload: fp.canDownload,
+    });
+  }
+
+  // Servicio y provider
   for (const p of perms) {
     if (p.providerId && !p.serviceId) {
       byProvider.set(p.providerId, { canView: p.canView });
@@ -78,7 +101,7 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
     }
   }
 
-  // Respuesta estructurada para el frontend
+  // Construcción RESULTADO FINAL para el front
   const result = providers.map((prov) => ({
     id: prov.id,
     displayName: prov.displayName,
@@ -86,13 +109,19 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
     memberClass: prov.memberClass,
     memberCode: prov.memberCode,
     subsystemCode: prov.subsystemCode,
+
     providerPermission: byProvider.get(prov.id) ?? { canView: false },
+
     services: prov.services.map((svc) => ({
       id: svc.id,
       serviceCode: svc.serviceCode,
       serviceVersion: svc.serviceVersion,
       servicePermission:
         byService.get(svc.id) ?? { canView: false, canDownload: false },
+
+      endpoints: svc.endpoints, // NECESARIO PARA CARGAR LISTA DE ARCHIVOS
+
+      filePermissions: byFile.get(svc.id) ?? [], // PERMISOS POR ARCHIVO
     })),
   }));
 
@@ -102,6 +131,7 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
     providers: result,
   });
 });
+
 
 /** ✅ POST /api/admin/users → crear usuario nuevo */
 adminRouter.post("/users", async (req, res) => {
@@ -373,6 +403,95 @@ adminRouter.post("/logs/hide", requireAuth, async (req, res) => {
   return res.json({ ok: true });
 });
 
+
+adminRouter.get(
+  "/users/:userId/file-permissions/:serviceId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const adminId = req.auth!.userId;
+      const adminUser = await prisma.user.findUnique({
+        where: { id: adminId },
+      });
+
+      if (adminUser?.role !== "ADMIN") {
+        return res.status(403).json({ error: "forbidden" });
+      }
+
+      const { userId, serviceId } = req.params;
+
+      const rules = await prisma.userFilePermission.findMany({
+        where: {
+          userId,
+          serviceId,
+        },
+        orderBy: { filename: "asc" },
+      });
+
+      return res.json({ ok: true, rules });
+    } catch (err) {
+      console.error("ADMIN file-permissions GET error:", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "file_permissions_fetch_failed" });
+    }
+  }
+);
+
+/**
+ * POST /api/admin/users/:userId/file-permissions/:serviceId
+ * Body: { rules: { filename, canView, canDownload }[] }
+ * Sobrescribe completamente las reglas para ese user+service.
+ */
+adminRouter.post(
+  "/users/:userId/file-permissions/:serviceId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const adminId = req.auth!.userId;
+      const adminUser = await prisma.user.findUnique({
+        where: { id: adminId },
+      });
+
+      if (adminUser?.role !== "ADMIN") {
+        return res.status(403).json({ error: "forbidden" });
+      }
+
+      const { userId, serviceId } = req.params;
+      const { rules } = req.body as {
+        rules: { filename: string; canView: boolean; canDownload: boolean }[];
+      };
+
+      if (!Array.isArray(rules)) {
+        return res.status(400).json({ error: "invalid_body" });
+      }
+
+      // estrategia simple: borrar todas las reglas anteriores y recrear
+      await prisma.userFilePermission.deleteMany({
+        where: { userId, serviceId },
+      });
+
+      if (rules.length > 0) {
+        await prisma.userFilePermission.createMany({
+          data: rules.map((r) => ({
+            userId,
+            serviceId,
+            filename: r.filename,
+            canView: !!r.canView,
+            canDownload: !!r.canDownload,
+          })),
+        });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("ADMIN file-permissions POST error:", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "file_permissions_save_failed" });
+    }
+  }
+);
 
 
 export { adminRouter };

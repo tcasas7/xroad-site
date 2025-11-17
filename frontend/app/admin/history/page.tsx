@@ -14,6 +14,7 @@ const ACTION_LABELS: Record<string, string> = {
   DOWNLOAD_FILE: "Descargó archivo",
   CREATE_USER: "Creó usuario",
   DELETE_USER: "Eliminó usuario",
+  UPDATE_PERMISSIONS: "Actualizó permisos"
 };
 
 function getActionLabel(action: string) {
