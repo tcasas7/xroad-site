@@ -4,7 +4,16 @@ export interface ProviderSummary {
   id: string;
   displayName: string;
   hasServices: boolean;
+  services: {
+    id: string;
+    code: string;
+    serviceCode?: string | null;
+    endpoints: { id: string; method: string; path: string }[];
+  }[];
+  _matchedServices?: any[];
+  _matchedFiles?: Record<string, string[]>;
 }
+
 
 export interface EndpointSummary {
   method: string;

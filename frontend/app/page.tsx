@@ -9,6 +9,8 @@ import {
   refreshProviders,
   getProviderServices,
   getFilesForEndpoint,
+  getUserFilePermissions,
+  getUserPermissions,
   logout,
 } from "@/lib/api";
 
@@ -24,6 +26,17 @@ import {
   Download,
   Loader2,
 } from "lucide-react";
+import DriveGrid from "./components/DriveGrid";
+
+
+type SearchEntry = {
+  type: "provider" | "service" | "file";
+  providerId: string;
+  providerName: string;
+  serviceId?: string;
+  serviceCode?: string;
+  fileName?: string;
+};
 
 
 export default function HomePage() {
@@ -49,6 +62,13 @@ export default function HomePage() {
 
   const [search, setSearch] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+
+  const [deepSearch, setDeepSearch] = useState("");
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [searchIndex, setSearchIndex] = useState<SearchEntry[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchEntry[]>([]);
+
+  
 
   /** INIT */
   useEffect(() => {
@@ -83,6 +103,51 @@ export default function HomePage() {
 
         setProviders(list);
         setFilteredProviders(list);
+
+   const index: SearchEntry[] = [];
+
+    for (const prov of list) {
+     
+      index.push({
+        type: "provider",
+        providerId: prov.id,
+        providerName: prov.displayName,
+      });
+
+     
+      const svcResp = await getProviderServices(prov.id);
+
+      for (const svc of svcResp.services ?? []) {
+        index.push({
+          type: "service",
+          providerId: prov.id,
+          providerName: prov.displayName,
+          serviceId: svc.id,
+          serviceCode: svc.code,
+        });
+
+        // Cargar archivos del endpoint
+        const ep = svc.endpoints?.[0];
+        if (!ep) continue;
+
+        try {
+          const filesResp = await getFilesForEndpoint(prov.id, svc.id, ep.path);
+          for (const file of filesResp.items ?? []) {
+            index.push({
+              type: "file",
+              providerId: prov.id,
+              providerName: prov.displayName,
+              serviceId: svc.id,
+              serviceCode: svc.code,
+              fileName: file,
+            });
+          }
+        } catch {}
+      }
+    }
+
+    setSearchIndex(index);
+
         setAuthChecked(true);
       } catch {
         router.push("/login");
@@ -92,19 +157,26 @@ export default function HomePage() {
     })();
   }, [router]);
 
-  /** SEARCH */
-  useEffect(() => {
-    if (!search.trim()) {
-      setFilteredProviders(providers);
-      return;
-    }
+  /** GLOBAL SEARCH */
+useEffect(() => {
+  const q = globalSearch.trim().toLowerCase();
 
-    setFilteredProviders(
-      providers.filter((p) =>
-        p.displayName.toLowerCase().includes(search.toLowerCase())
-      )
-    );
-  }, [search, providers]);
+  if (!q) {
+    setSearchResults([]);
+    return;
+  }
+
+  setSearchResults(
+    searchIndex.filter(
+      (e) =>
+        e.providerName.toLowerCase().includes(q) ||
+        e.serviceCode?.toLowerCase().includes(q) ||
+        e.fileName?.toLowerCase().includes(q)
+    )
+  );
+}, [globalSearch, searchIndex]);
+
+
 
   /** REFRESH */
   async function handleRefresh() {
@@ -122,249 +194,128 @@ export default function HomePage() {
     }
   }
 
-  /** OPEN PROVIDER */
-  async function openModal(provider: ProviderSummary) {
-    setModalProvider(provider);
-    setSelectedService(null);
-    const resp = await getProviderServices(provider.id);
-    setServices(resp.services);
-    setFiles(null);
+  function handleSearchClick(entry: SearchEntry) {
+  if (entry.type === "provider") {
+    router.push(`/drive?providerId=${entry.providerId}`);
+    return;
   }
 
-  /** LOAD FILES */
-async function handleSelectService(svc: ServiceSummary) {
-  const normalized = {
-    ...svc,
-    serviceCode: svc.serviceCode ?? svc.code, // ← aseguramos serviceCode
-  };
-
-  setSelectedService(normalized);
-  setFilesLoading(true);
-
-  try {
-    const ep = normalized.endpoints[0];
-    const { items } = await getFilesForEndpoint(
-      modalProvider!.id,
-      normalized.id,
-      ep.path,
-      false // ← usuario normal
+  if (entry.type === "service") {
+    router.push(
+      `/drive?providerId=${entry.providerId}&serviceId=${entry.serviceId}`
     );
-
-    setFiles(items);
-  } catch {
-    toast.error("Error cargando archivos");
-    setFiles([]);
+    return;
   }
 
-  setFilesLoading(false);
-}
-
-
-
-  /** STREAM URLS */
-function previewUrl(name: string) {
-  const ep = selectedService!.endpoints[0];
-  return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?providerId=${
-    modalProvider!.id
-  }&serviceId=${selectedService!.id}&serviceCode=${
-    selectedService!.serviceCode
-  }&endpointPath=${encodeURIComponent(ep.path)}&filename=${encodeURIComponent(
-    name
-  )}&mode=preview`;
-}
-
-
-function downloadUrl(name: string) {
-  const ep = selectedService!.endpoints[0];
-  return `${process.env.NEXT_PUBLIC_API_URL}/api/xroad/stream?providerId=${
-    modalProvider!.id
-  }&serviceId=${selectedService!.id}&serviceCode=${
-    selectedService!.serviceCode
-  }&endpointPath=${encodeURIComponent(ep.path)}&filename=${encodeURIComponent(
-    name
-  )}&mode=download`;
-}
-
-
-
-  /** SECURE DOWNLOAD */
-  async function secureDownload(url: string, filename: string) {
-    try {
-      const resp = await fetch(url, { credentials: "include" });
-
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => null);
-
-        toast.error(
-          data?.error === "forbidden_download"
-            ? "No tenés permiso para descargar"
-            : "Error descargando"
-        );
-        return;
-      }
-
-      const blob = await resp.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(link.href);
-
-      toast.success("Descarga iniciada");
-    } catch {
-      toast.error("Error descargando archivo");
-    }
+  if (entry.type === "file") {
+    router.push(
+      `/drive?providerId=${entry.providerId}&serviceId=${entry.serviceId}&file=${encodeURIComponent(
+        entry.fileName!
+      )}`
+    );
+    return;
   }
+}
 
   if (!authChecked) return <div className="p-6">Verificando…</div>;
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Header onRefresh={handleRefresh} />
+return (
+  <div className="min-h-screen bg-gray-50">
+    <Header onRefresh={handleRefresh} />
 
-      {/* BODY */}
-      <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
 
-        {/* SEARCH BAR */}
-        <div className="mb-4 flex items-center">
-          <div className="relative w-80">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
-            <input
-              className="w-full border rounded-lg pl-8 pr-3 py-2 bg-white shadow-sm"
-              placeholder="Buscar proveedor…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+      {/* 🔍 BUSCADOR GLOBAL */}
+      <div className="mb-6 max-w-3xl mx-auto relative">
+
+        <div className="relative">
+          <Search className="absolute left-3 top-3 h-5 w-5 text-gray-500" />
+
+          <input
+            className="w-full border rounded-full pl-10 pr-12 py-3 bg-white shadow-sm text-sm"
+            placeholder="Buscar proveedor, servicio o archivo…"
+            value={globalSearch}
+            onChange={(e) => setGlobalSearch(e.target.value)}
+          />
+
+          {globalSearch && (
+            <button
+              className="absolute right-3 top-3 text-gray-500 hover:text-black"
+              onClick={() => setGlobalSearch("")}
+            >
+              ✕
+            </button>
+          )}
         </div>
 
-        {/* TABLE */}
-        <div className="rounded-lg border shadow-sm overflow-hidden bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-3 text-left">Proveedores</th>
-                <th className="p-3 text-left">Servicios</th>
-                <th className="p-3 text-left">Acción</th>
-              </tr>
-            </thead>
+        {/* PANEL DE RESULTADOS */}
+        {globalSearch && (
+          <div className="absolute mt-2 w-full bg-white border rounded-xl shadow-xl max-h-[60vh] overflow-auto z-50">
 
-            <tbody>
-              {filteredProviders.map((p) => (
-                <tr key={p.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3">{p.displayName}</td>
-                  <td className="p-3">
-                    {p.hasServices ? "Sí" : "No"}
-                  </td>
-                  <td className="p-3">
-                    <button
-                      disabled={!p.hasServices}
-                      onClick={() => openModal(p)}
-                      className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300 text-sm flex items-center gap-1"
-                    >
-                      <FolderOpen size={14} />
-                      Ver servicios
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            {/* Filtros fake estilo Drive */}
+            <div className="flex gap-2 p-3 border-b bg-gray-50 text-xs text-gray-700">
+              <button className="px-3 py-1 border rounded-full hover:bg-gray-100">
+                Tipo
+              </button>
+              <button className="px-3 py-1 border rounded-full hover:bg-gray-100">
+                Persona
+              </button>
+              <button className="px-3 py-1 border rounded-full hover:bg-gray-100">
+                Modificado
+              </button>
+            </div>
 
-        {/* MODAL */}
-        {modalProvider && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg p-6 max-w-xl w-full shadow-xl">
-
-              {/* HEADER */}
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold">
-                  Servicios — {modalProvider.displayName}
-                </h2>
-                <button onClick={() => setModalProvider(null)}>✕</button>
-              </div>
-
-              {/* LISTA DE SERVICIOS */}
-              {!selectedService && services && (
-                <div className="space-y-3 max-h-[60vh] overflow-auto">
-                  {services.map((svc) => (
-                    <div
-                      key={svc.id}
-                      className="border rounded-lg p-4 shadow-sm bg-white flex justify-between items-center"
-                    >
-                      <div>
-                        <div className="font-bold">{svc.code}</div>
-                        <div className="text-xs text-gray-500">
-                          {svc.type}
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => handleSelectService(svc)}
-                        className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-sm"
-                      >
-                        Ver archivos
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* LISTA DE ARCHIVOS */}
-              {selectedService && (
-                <>
-                  <button
-                    onClick={() => {
-                      setSelectedService(null);
-                      setFiles(null);
-                    }}
-                    className="text-blue-600 underline text-sm mb-3"
+            {/* RESULTADOS */}
+            <div>
+              {searchResults.length === 0 ? (
+                <p className="p-4 text-sm text-gray-500">Sin resultados…</p>
+              ) : (
+                searchResults.map((r, i) => (
+                  <div
+                    key={i}
+                    onClick={() => handleSearchClick(r)}
+                    className="px-4 py-3 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
                   >
-                    ← Volver
-                  </button>
+                    <div className="flex flex-col">
 
-                  {filesLoading ? (
-                    <div className="flex justify-center py-6">
-                      <Loader2 className="animate-spin" size={28} />
+                      <span className="font-medium">
+                        {r.fileName || r.serviceCode || r.providerName}
+                      </span>
+
+                      <span className="text-xs text-gray-500">
+                        {r.type === "file" &&
+                          `Archivo · ${r.providerName} / ${r.serviceCode}`}
+                        {r.type === "service" &&
+                          `Servicio · ${r.providerName}`}
+                        {r.type === "provider" &&
+                          `Proveedor`}
+                      </span>
                     </div>
-                  ) : (
-                    <div className="space-y-3 max-h-[60vh] overflow-auto">
-                      {files?.length === 0 && <p>No hay archivos.</p>}
 
-                      {files?.map((f) => (
-                        <div
-                          key={f}
-                          className="border rounded-lg p-4 shadow-sm flex justify-between items-center"
-                        >
-                          <span>{f}</span>
-
-                          <div className="flex gap-2">
-                            <a
-                              href={previewUrl(f)}
-                              target="_blank"
-                              className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm flex items-center gap-1"
-                            >
-                              <Eye size={14} /> Ver
-                            </a>
-
-                            <button
-                              onClick={() => secureDownload(downloadUrl(f), f)}
-                              className="px-3 py-1 rounded bg-green-600 hover:bg-green-700 text-white text-sm flex items-center gap-1"
-                            >
-                              <Download size={14} /> Descargar
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
+                    <span className="text-xs text-gray-400">hoy</span>
+                  </div>
+                ))
               )}
             </div>
+
           </div>
         )}
       </div>
+
+      {/* =========================== */}
+      {/* 📁 GRID DE PROVEEDORES      */}
+      {/* =========================== */}
+      <DriveGrid
+        items={providers.map((p) => ({
+          id: p.id,
+          name: p.displayName,
+          type: "folder",
+        }))}
+        onOpen={(prov) => router.push(`/drive?providerId=${prov.id}`)}
+      />
+
     </div>
-  );
+  </div>
+);
+
 }
