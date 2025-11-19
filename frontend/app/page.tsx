@@ -11,6 +11,7 @@ import {
   getFilesForEndpoint,
   getUserFilePermissions,
   getUserPermissions,
+  getMe,
   logout,
 } from "@/lib/api";
 
@@ -27,6 +28,7 @@ import {
   Loader2,
 } from "lucide-react";
 import DriveGrid from "./components/DriveGrid";
+import { detectChanges } from "@/lib/changes";
 
 
 type SearchEntry = {
@@ -36,6 +38,12 @@ type SearchEntry = {
   serviceId?: string;
   serviceCode?: string;
   fileName?: string;
+};
+
+type ChangeSnapshot = {
+  newProviders: string[];
+  newServices: { providerId: string; serviceId: string }[];
+  newFiles: { providerId: string; serviceId: string; file: string }[];
 };
 
 
@@ -67,31 +75,57 @@ export default function HomePage() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [searchIndex, setSearchIndex] = useState<SearchEntry[]>([]);
   const [searchResults, setSearchResults] = useState<SearchEntry[]>([]);
+  const [changes, setChanges] = useState<ChangeSnapshot | null>(null);
+  const [showChangesModal, setShowChangesModal] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
 
-  
+  const [nameMaps, setNameMaps] = useState<{
+  providerNames: Record<string, string>,
+  serviceNames: Record<string, string>
+} | null>(null);
 
-  /** INIT */
-  useEffect(() => {
-    (async () => {
-      try {
-        const profile = await getProfileXroad();
 
-        if (!profile.hasCert) {
-          router.push("/setup");
-          return;
-        }
+/** INIT */
+useEffect(() => {
+  (async () => {
+    try {
+      // 1️⃣ Obtener ID real del usuario
+      const me = await getMe();
+      if (!me?.user?.id) {
+        console.error("No user ID found");
+        router.push("/login");
+        return;
+      }
 
-        setIsAdmin(profile.role === "ADMIN");
+      const userId = me.user.id;
+      console.log("REAL USER ID:", userId);
 
-      // Cargar proveedores SI EXISTEN, pero...
-      let list = [];
+      // 2️⃣ Obtener profile de X-Road
+      const profile = await getProfileXroad();
+
+      if (!profile.hasCert) {
+        router.push("/setup");
+        return;
+      }
+
+      setIsAdmin(profile.userRole === "ADMIN");
+      setProfile(profile);
+
+      // 3️⃣ Inicializar snapshot por usuario (si no existe)
+      const key = `snapshot_xroad_${userId}`;
+      const previousSnapshot = JSON.parse(
+        localStorage.getItem(key) ||
+        JSON.stringify({ providers: [], services: {}, files: {} })
+      );
+
+      // 4️⃣ Continuamos tu lógica normal ↓↓↓
+      let list: ProviderSummary[] = [];
       try {
         list = await getProviders();
       } catch {
         list = [];
       }
 
-      // Intentar refrescar solo si corresponde, pero NO obligar
       if (list.length === 0) {
         try {
           await refreshProviders();
@@ -101,61 +135,104 @@ export default function HomePage() {
         }
       }
 
-        setProviders(list);
-        setFilteredProviders(list);
+      setProviders(list);
+      setFilteredProviders(list);
 
-   const index: SearchEntry[] = [];
+      // SNAPSHOT ACTUAL
+      const index: SearchEntry[] = [];
+      const snapshotCurrent = {
+        providers: list.map((p) => p.id),
+        services: {} as Record<string, string[]>,
+        files: {} as Record<string, string[]>,
+      };
 
-    for (const prov of list) {
-     
-      index.push({
-        type: "provider",
-        providerId: prov.id,
-        providerName: prov.displayName,
-      });
-
-     
-      const svcResp = await getProviderServices(prov.id);
-
-      for (const svc of svcResp.services ?? []) {
+      for (const prov of list) {
         index.push({
-          type: "service",
+          type: "provider",
           providerId: prov.id,
           providerName: prov.displayName,
-          serviceId: svc.id,
-          serviceCode: svc.code,
         });
 
-        // Cargar archivos del endpoint
-        const ep = svc.endpoints?.[0];
-        if (!ep) continue;
+        const svcResp = await getProviderServices(prov.id);
+        const services: ServiceSummary[] = svcResp.services ?? [];
+        snapshotCurrent.services[prov.id] = services.map((s) => s.id);
 
-        try {
-          const filesResp = await getFilesForEndpoint(prov.id, svc.id, ep.path);
-          for (const file of filesResp.items ?? []) {
-            index.push({
-              type: "file",
-              providerId: prov.id,
-              providerName: prov.displayName,
-              serviceId: svc.id,
-              serviceCode: svc.code,
-              fileName: file,
-            });
+        for (const svc of services) {
+          index.push({
+            type: "service",
+            providerId: prov.id,
+            providerName: prov.displayName,
+            serviceId: svc.id,
+            serviceCode: svc.code,
+          });
+
+          const ep = svc.endpoints?.[0];
+          if (!ep) continue;
+
+          try {
+            const filesResp = await getFilesForEndpoint(prov.id, svc.id, ep.path);
+            const fileList = filesResp.items ?? [];
+
+            snapshotCurrent.files[`${prov.id}::${svc.id}`] = fileList;
+
+            for (const f of fileList) {
+              index.push({
+                type: "file",
+                providerId: prov.id,
+                providerName: prov.displayName,
+                serviceId: svc.id,
+                serviceCode: svc.code,
+                fileName: f,
+              });
+            }
+          } catch {
+            snapshotCurrent.files[`${prov.id}::${svc.id}`] = [];
           }
-        } catch {}
+        }
       }
+
+      const providerNames: Record<string, string> = {};
+      const serviceNames: Record<string, string> = {};
+
+      for (const prov of list) {
+        providerNames[prov.id] = prov.displayName;
+
+        const svcResp = await getProviderServices(prov.id);
+        const services: ServiceSummary[] = svcResp.services ?? [];
+
+        for (const svc of services) {
+          serviceNames[svc.id] = svc.code;
+        }
+      }
+
+      // Guardamos los mapas en estado para usarlos al renderizar modal
+      setNameMaps({
+        providerNames,
+        serviceNames,
+      });
+
+      setSearchIndex(index);
+
+      // 5️⃣ Detectar cambios usando snapshot previo REAL del usuario
+      const updates = detectChanges(snapshotCurrent, previousSnapshot);
+      setChanges(updates);
+
+      // 6️⃣ Guardar nuevo snapshot por usuario
+      localStorage.setItem(
+        key,
+        JSON.stringify(snapshotCurrent)
+      );
+
+      setAuthChecked(true);
+    } catch (err) {
+      router.push("/login");
+    } finally {
+      setLoading(false);
     }
+  })();
+}, [router]);
 
-    setSearchIndex(index);
 
-        setAuthChecked(true);
-      } catch {
-        router.push("/login");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [router]);
 
   /** GLOBAL SEARCH */
 useEffect(() => {
@@ -217,7 +294,38 @@ useEffect(() => {
   }
 }
 
+const [recentFiles, setRecentFiles] = useState<any[]>([]);
+
+useEffect(() => {
+  const raw = localStorage.getItem("recent_files");
+  if (!raw) return;
+
+  try {
+    const list = JSON.parse(raw);
+
+    // orden descendente por fecha
+    list.sort((a: any, b: any) => b.accessedAt - a.accessedAt);
+
+    setRecentFiles(list);
+  } catch {}
+}, []);
+
+function timeAgo(ts: number) {
+  const diff = Date.now() - ts;
+  const min = 60 * 1000;
+  const hour = 60 * min;
+  const day = 24 * hour;
+
+  if (diff < min) return "ahora";
+  if (diff < hour) return `${Math.floor(diff / min)} min atrás`;
+  if (diff < day) return `${Math.floor(diff / hour)} hor atrás`;
+  return `${Math.floor(diff / day)} días atrás`;
+}
+
+
   if (!authChecked) return <div className="p-6">Verificando…</div>;
+
+
 
 return (
   <div className="min-h-screen bg-gray-50">
@@ -302,6 +410,55 @@ return (
         )}
       </div>
 
+      {recentFiles.length > 0 && (
+        <div className="mb-10">
+          <h2 className="text-lg font-semibold text-gray-700 mb-4">Recientes</h2>
+
+          <div className="bg-white border rounded-xl shadow p-4">
+            {recentFiles.map((r, i) => (
+              <div
+                key={i}
+                onClick={() =>
+                  router.push(
+                    `/drive?providerId=${r.providerId}&serviceId=${r.serviceId}&file=${encodeURIComponent(
+                      r.name
+                    )}`
+                  )
+                }
+                className="flex items-center justify-between px-2 py-2 hover:bg-gray-50 cursor-pointer rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  {/* icono según extensión */}
+                  <span className="text-blue-600 text-xl">
+                    {r.name.endsWith(".pdf") && "📄"}
+                    {r.name.endsWith(".txt") && "📄"}
+                    {r.name.endsWith(".zip") && "🗜️"}
+                    {r.name.endsWith(".csv") && "📊"}
+                    {r.name.endsWith(".jpg") && "🖼️"}
+                    {r.name.endsWith(".png") && "🖼️"}
+                    {r.name.endsWith(".mp4") && "🎥"}
+                    {!r.name.includes(".") && "📁"}
+                  </span>
+
+                  <div className="flex flex-col">
+                    <span className="font-medium">{r.name}</span>
+                  <span className="text-xs text-gray-500">
+                    {nameMaps?.providerNames?.[r.providerId] ?? r.providerId} /{" "}
+                    {nameMaps?.serviceNames?.[r.serviceId] ?? r.serviceId}
+                  </span>
+                  </div>
+                </div>
+
+                <span className="text-xs text-gray-400">
+                  {timeAgo(r.accessedAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+
       {/* =========================== */}
       {/* 📁 GRID DE PROVEEDORES      */}
       {/* =========================== */}
@@ -313,6 +470,63 @@ return (
         }))}
         onOpen={(prov) => router.push(`/drive?providerId=${prov.id}`)}
       />
+{changes &&
+  (
+    changes.newProviders?.length > 0 ||
+    changes.newServices?.length > 0 ||
+    changes.newFiles?.length > 0
+  ) && (
+    <button
+      onClick={() => setShowChangesModal(true)}
+      className="fixed bottom-6 right-6 bg-blue-600 text-white px-4 py-3 rounded-full shadow-lg hover:bg-blue-700 transition"
+    >
+      🔔 Tienes novedades
+    </button>
+  )
+}
+
+{showChangesModal && (
+  <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
+    <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-xl">
+      <h2 className="text-xl font-semibold mb-4">Novedades en X-Road</h2>
+
+      {/* NUEVOS PROVEEDORES */}
+      {changes?.newProviders?.map((p) => (
+        <div key={p} className="py-1">
+          📁 Nuevo proveedor: <b>{nameMaps?.providerNames[p] ?? p}</b>
+        </div>
+      ))}
+
+      {/* NUEVOS SERVICIOS */}
+      {changes?.newServices?.map((s) => (
+        <div key={s.providerId + s.serviceId} className="py-1">
+          🔧 Nuevo servicio:{" "}
+          <b>{nameMaps?.serviceNames[s.serviceId] ?? s.serviceId}</b>{" "}
+          en{" "}
+          {nameMaps?.providerNames[s.providerId] ??
+            s.providerId}
+        </div>
+      ))}
+
+      {/* NUEVOS ARCHIVOS */}
+      {changes?.newFiles?.map((f) => (
+        <div key={f.providerId + f.serviceId + f.file} className="py-1">
+          📄 Nuevo archivo: <b>{f.file}</b>{" "}
+          ({nameMaps?.serviceNames[f.serviceId] ?? f.serviceId})
+        </div>
+      ))}
+
+      <button
+        onClick={() => setShowChangesModal(false)}
+        className="mt-4 px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300"
+      >
+        Cerrar
+      </button>
+    </div>
+  </div>
+)}
+
+
 
     </div>
   </div>
