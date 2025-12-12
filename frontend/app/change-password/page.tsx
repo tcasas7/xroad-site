@@ -15,7 +15,8 @@ export default function ChangePasswordPage() {
     setLoading(true);
 
     try {
-      const resp = await fetch("http://localhost:4000/api/auth/change-password", {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4040";
+      const resp = await fetch(`${API_URL}/api/auth/change-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include", // ✅ usa la cookie JWT

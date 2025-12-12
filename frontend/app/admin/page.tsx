@@ -40,6 +40,12 @@ export default function AdminPage() {
         >
           🗂 Gestión de Servicios / Permisos
         </Link>
+        <Link
+          href="/admin/certificates"
+          className="block bg-gray-100 hover:bg-gray-200 p-3 rounded"
+        >
+          🔐 Certificados X-Road
+        </Link>
       </div>
     </div>
   );

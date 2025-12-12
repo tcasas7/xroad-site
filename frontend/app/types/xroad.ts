@@ -29,7 +29,11 @@ export interface ServiceSummary {
   endpoints: EndpointSummary[];
   canView?: boolean;
   canDownload?: boolean;
-  
+  permissions?: {
+    canView?: boolean;
+    canDownload?: boolean;
+    canUpload?: boolean;
+  };
 }
 
 export interface ProviderServicesResponse {

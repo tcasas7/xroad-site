@@ -1,5 +1,5 @@
-// lib/api.ts
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4040";
 
 type LogsParams = {
   from?: string;
@@ -66,6 +66,7 @@ export async function getProviderServices(id: string) {
     version: s.serviceVersion,
     type: s.serviceType ?? "REST",
     endpoints: s.endpoints ?? [],
+    permissions: s.permissions ?? undefined,
   }));
 
   return { ok: data.ok, services: normalized };
@@ -259,6 +260,7 @@ export async function saveUserPermissions(
       serviceId: string;
       canView: boolean;
       canDownload: boolean;
+      canUpload: boolean;
     }[];
   }
 ) {
@@ -313,5 +315,41 @@ export async function saveUserFilePermissions(
   );
 
   if (!resp.ok) throw new Error("Error saving file permissions");
+  return resp.json();
+}
+
+// ==== ADMIN CERTIFICATES ====
+
+export async function adminGetUserCertificate(userId: string) {
+  const resp = await fetch(`${API_URL}/api/admin/users/${userId}/certificate`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (!resp.ok) throw new Error("Error fetching user certificate");
+  return resp.json(); // { ok, hasCert, cert? }
+}
+
+export async function adminUploadUserCertificate(
+  userId: string,
+  formData: FormData
+) {
+  const resp = await fetch(`${API_URL}/api/admin/users/${userId}/certificate`, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (!resp.ok) throw new Error("Error uploading user certificate");
+  return resp.json();
+}
+
+export async function adminDeleteUserCertificate(userId: string) {
+  const resp = await fetch(`${API_URL}/api/admin/users/${userId}/certificate`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+
+  if (!resp.ok) throw new Error("Error deleting user certificate");
   return resp.json();
 }

@@ -1,12 +1,21 @@
 import { Router } from "express";
 import { prisma } from "../../db/prisma";
 import { requireAuth } from "../../middlewares/auth";
-import bcrypt from 'bcryptjs';
+import bcrypt from "bcryptjs";
 import { requireAdmin } from "../../middlewares/isAdmin";
 import { router } from "../auth/router";
 import { logAction } from "../logs/logger";
+import multer from "multer";
+import tls from "tls";
+import { encryptAesGcm } from "../../core/crypto/aesgcm";
+import {
+  parsePkcs12Meta,
+  getCertFingerprintSubjectDates,
+} from "../../core/mtls/agentFactory";
+import { clearAgent } from "../../core/mtls/agentCache";
 
 const adminRouter = Router();
+const certUpload = multer({ storage: multer.memoryStorage() });
 
 /** 🔒 Middleware para verificar que el usuario sea admin */
 adminRouter.use(requireAuth, async (req, res, next) => {
@@ -31,6 +40,47 @@ adminRouter.get("/users", async (_req, res) => {
   });
 
   return res.json({ ok: true, users });
+});
+
+// ✅ GET /api/admin/users/:id/certificate → metadata del certificado de un usuario
+adminRouter.get("/users/:id/certificate", requireAuth, async (req, res) => {
+  try {
+    const adminId = req.auth!.userId;
+    const admin = await prisma.user.findUnique({ where: { id: adminId } });
+    if (!admin || admin.role !== "ADMIN") {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const userId = req.params.id;
+
+    const cert = await prisma.userCertificate.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        fingerprint: true,
+        subject: true,
+        notBefore: true,
+        notAfter: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!cert) {
+      return res.json({ ok: true, hasCert: false });
+    }
+
+    return res.json({
+      ok: true,
+      hasCert: true,
+      cert,
+    });
+  } catch (err) {
+    console.error("ADMIN GET certificate error:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "admin_certificate_fetch_failed" });
+  }
 });
 
 
@@ -70,7 +120,7 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
   const byProvider = new Map<string, { canView: boolean }>();
   const byService = new Map<
     string,
-    { canView: boolean; canDownload: boolean }
+    { canView: boolean; canDownload: boolean; canUpload: boolean }
   >();
 
   const byFile = new Map<
@@ -97,6 +147,7 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
       byService.set(p.serviceId, {
         canView: p.canView,
         canDownload: p.canDownload,
+        canUpload: p.canUpload ?? false,
       });
     }
   }
@@ -117,7 +168,11 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
       serviceCode: svc.serviceCode,
       serviceVersion: svc.serviceVersion,
       servicePermission:
-        byService.get(svc.id) ?? { canView: false, canDownload: false },
+        byService.get(svc.id) ?? {
+          canView: false,
+          canDownload: false,
+          canUpload: false,
+        },
 
       endpoints: svc.endpoints, // NECESARIO PARA CARGAR LISTA DE ARCHIVOS
 
@@ -131,6 +186,95 @@ adminRouter.get("/users/:id/permissions", async (req, res) => {
     providers: result,
   });
 });
+
+// ✅ POST /api/admin/users/:id/certificate → subir o reemplazar certificado de un usuario
+adminRouter.post(
+  "/users/:id/certificate",
+  requireAuth,
+  certUpload.single("p12"),
+  async (req, res) => {
+    try {
+      const adminId = req.auth!.userId;
+      const admin = await prisma.user.findUnique({ where: { id: adminId } });
+      if (!admin || admin.role !== "ADMIN") {
+        return res.status(403).json({ error: "forbidden" });
+      }
+
+      const userId = req.params.id;
+      const { passphrase = "" } = req.body || {};
+
+      if (!req.file) {
+        return res.status(400).json({ error: "p12_required" });
+      }
+
+      // Validar que el P12 se pueda abrir
+      try {
+        tls.createSecureContext({ pfx: req.file.buffer, passphrase });
+      } catch {
+        return res.status(400).json({ error: "invalid_p12_or_passphrase" });
+      }
+
+      // Extraer metadata del certificado
+      const certObj = parsePkcs12Meta(req.file.buffer, passphrase);
+      const meta = getCertFingerprintSubjectDates(certObj);
+
+      // Cifrar P12 + passphrase
+      const masterKey = Buffer.from(process.env.MASTER_KEY!, "hex");
+      const encP12 = encryptAesGcm(req.file.buffer, masterKey);
+      const encPass = encryptAesGcm(Buffer.from(passphrase, "utf8"), masterKey);
+
+      // Guardar en DB con upsert
+      await prisma.userCertificate.upsert({
+        where: { userId },
+        update: {
+          p12Encrypted: encP12.ciphertext,
+          iv: encP12.iv,
+          authTag: encP12.authTag,
+          passEncrypted: encPass.ciphertext,
+          passIv: encPass.iv,
+          passAuthTag: encPass.authTag,
+          fingerprint: meta.fingerprint,
+          subject: meta.subject,
+          notBefore: meta.notBefore,
+          notAfter: meta.notAfter,
+        },
+        create: {
+          userId,
+          p12Encrypted: encP12.ciphertext,
+          iv: encP12.iv,
+          authTag: encP12.authTag,
+          passEncrypted: encPass.ciphertext,
+          passIv: encPass.iv,
+          passAuthTag: encPass.authTag,
+          fingerprint: meta.fingerprint,
+          subject: meta.subject,
+          notBefore: meta.notBefore,
+          notAfter: meta.notAfter,
+        },
+      });
+
+      // Limpiar cache de agente mTLS
+      clearAgent(`userCert_${userId}`);
+
+      // Log de acción
+      await logAction(
+        adminId,
+        "UPLOAD_CERT_ADMIN",
+        `Reemplazó certificado del usuario ${userId}`
+      );
+
+      return res.json({ ok: true, meta });
+    } catch (e: unknown) {
+      const err = e as Error;
+      console.error("ADMIN cert upload error:", err.message || err);
+      return res.status(500).json({
+        ok: false,
+        error: "admin_cert_upload_failed",
+        detail: err.message || String(err),
+      });
+    }
+  }
+);
 
 
 /** ✅ POST /api/admin/users → crear usuario nuevo */
@@ -218,6 +362,7 @@ adminRouter.post("/users/:id/permissions", async (req, res) => {
         serviceId: s.serviceId,
         canView: !!s.canView,
         canDownload: !!s.canDownload,
+        canUpload: !!s.canUpload,
       });
     }
   }
@@ -294,6 +439,37 @@ adminRouter.delete("/users/:id", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("❌ Error eliminando usuario:", err);
     return res.status(500).json({ error: "delete_failed" });
+  }
+});
+
+// ✅ DELETE /api/admin/users/:id/certificate → eliminar certificado de un usuario
+adminRouter.delete("/users/:id/certificate", requireAuth, async (req, res) => {
+  try {
+    const adminId = req.auth!.userId;
+    const admin = await prisma.user.findUnique({ where: { id: adminId } });
+    if (!admin || admin.role !== "ADMIN") {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const userId = req.params.id;
+
+    await prisma.userCertificate.deleteMany({ where: { userId } });
+
+    // Limpiar cache de agente mTLS
+    clearAgent(`userCert_${userId}`);
+
+    await logAction(
+      adminId,
+      "DELETE_CERT",
+      `Eliminó certificado del usuario ${userId}`
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("ADMIN cert delete error:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "admin_cert_delete_failed" });
   }
 });
 

@@ -5,7 +5,7 @@ import axios from "axios";
 import { requireAuth } from "../../middlewares/auth";
 import { getMtlsAgentForUser } from "../../core/mtls/agentFactory";
 import { logAction } from "../logs/logger";
-
+import multer from "multer";
 import {
   canViewProvider,
   canViewService,
@@ -13,8 +13,10 @@ import {
   canViewFile,
   canDownloadFile
 } from "../permissions/permissionService";
+import FormData from "form-data";
 
 const xroadRouter = Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 /* ==========================================================
  * GET /api/xroad/files
@@ -427,6 +429,113 @@ xroadRouter.get("/stream", requireAuth, async (req, res) => {
     return res.status(502).json({ error: "stream_failed" });
   }
 });
+
+xroadRouter.post(
+  "/upload",
+  requireAuth,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const userId = req.auth!.userId;
+      const { providerId, serviceId, serviceCode, endpointPath } = req.query;
+
+      if (!providerId || !serviceId || !serviceCode || !endpointPath) {
+        return res.status(400).json({ error: "Missing params" });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: "file_required" });
+      }
+
+      const providerIdStr = String(providerId);
+      const serviceIdStr = String(serviceId);
+      const serviceCodeStr = String(serviceCode);
+      const endpointPathStr = String(endpointPath);
+
+      // 🔒 Permisos: tiene que poder subir en este servicio
+      // (asumimos que ya agregaste canUpload en UserServicePermission)
+      const uploadPerm = await prisma.userServicePermission.findFirst({
+        where: {
+          userId,
+          serviceId: serviceIdStr,
+          canUpload: true,
+        },
+      });
+
+      if (!uploadPerm) {
+        return res.status(403).json({ error: "forbidden_upload" });
+      }
+
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user?.baseUrl) {
+        return res.status(400).json({ error: "missing_baseurl" });
+      }
+
+      const provider = await prisma.provider.findUnique({
+        where: { id: providerIdStr },
+      });
+
+      if (!provider) {
+        return res.status(404).json({ error: "provider_not_found" });
+      }
+
+      // Construir URL del endpoint de subida
+      const base = user.baseUrl.replace(/\/+$/, "");
+      const cleanEndpoint = endpointPathStr.replace(/^\//, "");
+
+      const uploadUrl = [
+        base,
+        provider.routeVersion,
+        provider.xRoadInstance,
+        provider.memberClass,
+        provider.memberCode,
+        provider.subsystemCode,
+        serviceCodeStr,
+        cleanEndpoint,
+      ]
+        .filter(Boolean)
+        .join("/");
+
+      const consumerHeader =
+        `${user.xRoadInstance}/${user.xRoadMemberClass}/` +
+        `${user.xRoadMemberCode}/${user.xRoadSubsystem}`;
+
+      const httpsAgent = await getMtlsAgentForUser(userId);
+
+      // Multipart form hacia el proveedor X-Road
+      const form = new FormData();
+      form.append("file", req.file.buffer, {
+        filename: req.file.originalname,
+        contentType: req.file.mimetype,
+      });
+
+      const r = await axios.post(uploadUrl, form, {
+        httpsAgent,
+        headers: {
+          ...form.getHeaders(),
+          "X-Road-Client": consumerHeader,
+        },
+        maxBodyLength: Infinity,
+      });
+
+      // Log
+      await logAction(
+        userId,
+        "UPLOAD_FILE",
+        `Subió archivo ${req.file.originalname} al servicio ${serviceCodeStr}`
+      );
+
+      return res.json({
+        ok: true,
+        upstreamStatus: r.status,
+        upstreamData: r.data,
+      });
+    } catch (err) {
+      console.error("UPLOAD ERROR =>", err);
+      return res.status(502).json({ error: "upload_failed" });
+    }
+  }
+);
 
 
 export { xroadRouter };

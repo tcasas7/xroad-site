@@ -84,6 +84,10 @@ export default function HomePage() {
   serviceNames: Record<string, string>
 } | null>(null);
 
+  const [uploadableServices, setUploadableServices] = useState<
+    { providerId: string; providerName: string; serviceId: string; serviceCode: string }[]
+  >([]);
+
 
 /** INIT */
 useEffect(() => {
@@ -146,6 +150,13 @@ useEffect(() => {
         files: {} as Record<string, string[]>,
       };
 
+      const uploadables: {
+        providerId: string;
+        providerName: string;
+        serviceId: string;
+        serviceCode: string;
+      }[] = [];
+
       for (const prov of list) {
         index.push({
           type: "provider",
@@ -165,6 +176,15 @@ useEffect(() => {
             serviceId: svc.id,
             serviceCode: svc.code,
           });
+
+          if (svc.permissions?.canUpload) {
+            uploadables.push({
+              providerId: prov.id,
+              providerName: prov.displayName,
+              serviceId: svc.id,
+              serviceCode: svc.code,
+            });
+          }
 
           const ep = svc.endpoints?.[0];
           if (!ep) continue;
@@ -210,6 +230,8 @@ useEffect(() => {
         providerNames,
         serviceNames,
       });
+
+      setUploadableServices(uploadables);
 
       setSearchIndex(index);
 
@@ -457,6 +479,46 @@ return (
           </div>
         </div>
       )}
+
+
+      {/* Servicios donde el usuario puede subir archivos */}
+      <div className="mb-10">
+        <h2 className="text-lg font-semibold text-gray-700 mb-4">
+          Servicios donde podés subir archivos
+        </h2>
+
+        {uploadableServices.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            Todavía no tenés servicios con permiso para subir archivos.
+          </p>
+        ) : (
+          <div className="bg-white border rounded-xl shadow divide-y">
+            {uploadableServices.map((s, idx) => (
+              <button
+                key={`${s.providerId}-${s.serviceId}-${idx}`}
+                onClick={() =>
+                  router.push(
+                    `/drive?providerId=${s.providerId}&serviceId=${s.serviceId}`
+                  )
+                }
+                className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50"
+              >
+                <div className="flex flex-col">
+                  <span className="font-medium text-gray-800">
+                    {s.serviceCode}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {nameMaps?.providerNames?.[s.providerId] ?? s.providerName}
+                  </span>
+                </div>
+                <span className="text-xs px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                  Subir archivo
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
 
       {/* =========================== */}

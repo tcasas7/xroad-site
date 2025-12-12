@@ -77,7 +77,7 @@ model Provider {
   services      Service[]
   user          User?    @relation(fields: [userId], references: [id])
   servicePermissions UserServicePermission[]
-
+  uploadedFiles UploadedFile[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -95,7 +95,7 @@ model Service {
   provider       Provider @relation(fields: [providerId], references: [id])
   endpoints      Endpoint[]
   servicePermissions UserServicePermission[]
-
+  uploadedFiles     UploadedFile[]
   user           User?    @relation(fields: [userId], references: [id]) // <-- inversa en User.servicesOwned
 
   createdAt      DateTime @default(now())
@@ -124,12 +124,16 @@ model Endpoint {
 model UploadedFile {
   id         String   @id @default(cuid())
   userId     String
+  providerId String?
+  serviceId  String?
   filename   String
   mimetype   String
   size       Int
   path       String
   createdAt  DateTime @default(now())
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider   Provider? @relation(fields: [providerId], references: [id])
+  service    Service?  @relation(fields: [serviceId], references: [id])
 }
 
 model ActionLog {
@@ -149,6 +153,7 @@ model UserServicePermission {
   serviceId   String?
   canView     Boolean  @default(false)
   canDownload Boolean  @default(false)
+  canUpload   Boolean  @default(false)
 
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider    Provider? @relation(fields: [providerId], references: [id])

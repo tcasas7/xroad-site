@@ -165,3 +165,21 @@ export async function canDownloadFile(
   const rule = rules.find((r) => r.filename === filename);
   return !!rule && rule.canDownload;
 }
+
+export async function canUploadService(
+  userId: string,
+  providerId: string,
+  serviceId: string
+) {
+  
+  const prov = await prisma.userServicePermission.findFirst({
+    where: { userId, providerId, canUpload: true, serviceId: null },
+  });
+  if (prov) return true;
+
+  const svc = await prisma.userServicePermission.findFirst({
+    where: { userId, serviceId, canUpload: true },
+  });
+
+  return !!svc;
+}
